@@ -32,4 +32,4 @@
 ## 🌐 Demo en Vivo
 
 Puedes probar el módulo de visión artificial en tiempo real directamente desde tu navegador o dispositivo móvil:  
-👉 [Probar EcoScan IA](https://kenerbotina.github.io/tallerdeingenieria/)
+👉 [Probar EcoScan IA](https://kenerbotina.github.io/EcoScan-IA/)
