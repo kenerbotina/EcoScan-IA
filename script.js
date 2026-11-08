@@ -5,21 +5,25 @@
 // Modelo oficial (organic, recyclable, non-recyclable)
 const MODEL_URL = "https://teachablemachine.withgoogle.com/models/AG8xg8V-G/";
 const PREDICT_SIZE = 224; // tamaño cuadrado que espera el modelo
+const CONFIDENCE_THRESHOLD = 0.65;
 
 // Textos y colores legibles por clase
 const CLASS_INFO = {
   "organic": {
-    label: "🌱 Orgánico aprovechable",
+    label: "Orgánico aprovechable",
+    icon: '<svg class="classification-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4C11 4 5 8 5 15c0 2.8 2.2 5 5 5 7 0 10-6 10-16Z"/><path d="M4 20c2.5-4 6-7 11-9"/></svg>',
     desc: "Se traslada a plantas de compostaje biológico.",
     tone: "organic"
   },
   "recyclable": {
-    label: "💧 Material reciclable",
+    label: "Material reciclable",
+    icon: '<svg class="classification-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 3-3 5h4l2-3 2 3h4l-3-5H8Z"/><path d="m19 9 2 5h-6l-2-3H9l-2 3H3l3-5"/><path d="M5 16v5h6l-2-3 2-3H5Z"/></svg>',
     desc: "Prioridad de clasificación: PET, PEAD y PP.",
     tone: "recyclable"
   },
   "non-recyclable": {
-    label: "🗑️ No aprovechable",
+    label: "No aprovechable",
+    icon: '<svg class="classification-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m6 7 1 13h10l1-13"/><path d="M10 11v5M14 11v5"/></svg>',
     desc: "Va directo a disposición final (relleno sanitario).",
     tone: "non-recyclable"
   }
@@ -37,6 +41,7 @@ const els = {
   statusTitle: document.getElementById("status-title"),
   statusResult: document.getElementById("status-result"),
   statusDesc: document.getElementById("status-desc"),
+  statusAction: document.getElementById("status-action"),
   labelContainer: document.getElementById("label-container"),
   errorMsg: document.getElementById("error-msg"),
   captureCanvas: document.getElementById("capture-canvas"),
@@ -99,49 +104,34 @@ async function detectPreferredFacing() {
   return "user";
 }
 
-// Calcula un recorte tipo "cover" para que el frame encaje limpio en el canvas.
-function computeCoverRect(sourceWidth, sourceHeight, targetWidth, targetHeight) {
-  const sourceRatio = sourceWidth / sourceHeight;
-  const targetRatio = targetWidth / targetHeight;
-
-  let drawWidth = targetWidth;
-  let drawHeight = targetHeight;
-  let offsetX = 0;
-  let offsetY = 0;
-
-  if (sourceRatio > targetRatio) {
-    drawHeight = targetHeight;
-    drawWidth = targetHeight * sourceRatio;
-    offsetX = -(drawWidth - targetWidth) / 2;
-  } else {
-    drawWidth = targetWidth;
-    drawHeight = targetWidth / sourceRatio;
-    offsetY = -(drawHeight - targetHeight) / 2;
-  }
-
-  return { drawWidth, drawHeight, offsetX, offsetY };
-}
-
-function drawVideoToCanvas(ctx, targetWidth, targetHeight, videoEl, options = {}) {
+// Dibuja el video actual en un canvas cuadrado, recortando "cover"
+function drawVideoToCanvas(ctx, size, videoEl) {
   const vw = videoEl.videoWidth;
   const vh = videoEl.videoHeight;
-  if (!vw || !vh) return false;
+  if (!vw || !vh) return;
 
-  const { mirror = false } = options;
-  const rect = computeCoverRect(vw, vh, targetWidth, targetHeight);
+  const scale = Math.max(size / vw, size / vh);
+  const sw = size / scale;
+  const sh = size / scale;
+  const sx = (vw - sw) / 2;
+  const sy = (vh - sh) / 2;
 
-  ctx.save();
-  ctx.clearRect(0, 0, targetWidth, targetHeight);
-  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(videoEl, sx, sy, sw, sh, 0, 0, size, size);
+}
 
-  if (mirror) {
-    ctx.translate(targetWidth, 0);
-    ctx.scale(-1, 1);
-  }
-
-  ctx.drawImage(videoEl, 0, 0, vw, vh, rect.offsetX, rect.offsetY, rect.drawWidth, rect.drawHeight);
-  ctx.restore();
-  return true;
+function normalizeClassName(className) {
+  const key = className.trim().toLowerCase();
+  const aliases = {
+    organico: "organic",
+    orgánico: "organic",
+    reciclable: "recyclable",
+    plastico: "recyclable",
+    plástico: "recyclable",
+    "no-aprovechable": "non-recyclable",
+    "no aprovechable": "non-recyclable",
+    "no-util": "non-recyclable",
+  };
+  return aliases[key] || key;
 }
 
 // =========================================================
@@ -232,7 +222,7 @@ async function refreshCameraCount() {
 async function predictLoop() {
   if (!running) return;
 
-  drawVideoToCanvas(predictCtx, PREDICT_SIZE, PREDICT_SIZE, els.video);
+  drawVideoToCanvas(predictCtx, PREDICT_SIZE, els.video);
 
   try {
     const prediction = await model.predict(predictCanvas);
@@ -249,14 +239,16 @@ function updatePredictionUI(prediction) {
 
   prediction.forEach((p, i) => {
     const pct = Math.round(p.probability * 100);
-    const key = p.className.trim().toLowerCase();
+    const key = normalizeClassName(p.className);
     const info = CLASS_INFO[key];
     const readableName = info ? info.label : p.className;
 
     const row = document.getElementById(`pred-row-${i}`);
     if (row) {
       row.dataset.class = key;
-      document.getElementById(`pred-text-${i}`).textContent = readableName;
+      document.getElementById(`pred-text-${i}`).innerHTML = info
+        ? `${info.icon}<span>${readableName}</span>`
+        : readableName;
       document.getElementById(`pred-value-${i}`).textContent = `${pct}%`;
       document.getElementById(`pred-bar-${i}`).style.width = `${pct}%`;
     }
@@ -264,8 +256,8 @@ function updatePredictionUI(prediction) {
     if (p.probability > top.probability) top = p;
   });
 
-  if (top.probability > 0.65) {
-    const key = top.className.trim().toLowerCase();
+  if (top.probability >= CONFIDENCE_THRESHOLD) {
+    const key = normalizeClassName(top.className);
     lastPrediction = { key, probability: top.probability };
     updateBigScreen(key);
   }
@@ -276,9 +268,31 @@ function updateBigScreen(key) {
   if (!info) return;
 
   els.screen.dataset.tone = info.tone;
+  const actions = {
+    organic: {
+      label: "Ver planta de compostaje",
+      href: "organico.html",
+    },
+    recyclable: {
+      label: "Ver materiales reciclables",
+      href: "reciclable.html",
+    },
+    "non-recyclable": {
+      label: "Ver disposición final",
+      href: "relleno.html",
+    },
+  };
+  const action = actions[key];
+
   els.statusTitle.textContent = "Escaneo IA en tiempo real";
-  els.statusResult.textContent = info.label;
+  els.statusResult.innerHTML = `${info.icon}<span>${info.label}</span>`;
   els.statusDesc.textContent = info.desc;
+  if (action) {
+    els.statusAction.textContent = action.label;
+    els.statusAction.href = action.href;
+    els.statusAction.dataset.tone = info.tone;
+    els.statusAction.hidden = false;
+  }
 }
 
 // =========================================================
@@ -294,11 +308,13 @@ function capturePhoto() {
   els.captureCanvas.height = vh;
   const ctx = els.captureCanvas.getContext("2d");
 
-  const didDraw = drawVideoToCanvas(ctx, vw, vh, els.video, {
-    mirror: currentFacing === "user"
-  });
-
-  if (!didDraw) return;
+  ctx.save();
+  if (currentFacing === "user") {
+    ctx.translate(vw, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(els.video, 0, 0, vw, vh);
+  ctx.restore();
 
   const dataUrl = els.captureCanvas.toDataURL("image/png");
   els.photoPreview.src = dataUrl;
@@ -310,7 +326,7 @@ function capturePhoto() {
   if (lastPrediction && CLASS_INFO[lastPrediction.key]) {
     const info = CLASS_INFO[lastPrediction.key];
     els.photoResultLabel.textContent = "Resultado del escaneo";
-    els.photoResultValue.textContent = `${info.label} · ${Math.round(lastPrediction.probability * 100)}%`;
+    els.photoResultValue.innerHTML = `${info.icon}<span>${info.label} · ${Math.round(lastPrediction.probability * 100)}%</span>`;
   } else {
     els.photoResultLabel.textContent = "Resultado del escaneo";
     els.photoResultValue.textContent = "Sin clasificar todavía";
@@ -357,6 +373,7 @@ function handleStop() {
   running = false;
   if (loopHandle) cancelAnimationFrame(loopHandle);
   stopStreamTracks();
+  lastPrediction = null;
 
   els.viewfinder.dataset.active = "false";
   els.cameraBadge.hidden = true;
@@ -365,6 +382,9 @@ function handleStop() {
   els.startBtn.textContent = "Iniciar escáner";
 
   els.screen.removeAttribute("data-tone");
+  els.statusAction.hidden = true;
+  els.statusAction.removeAttribute("data-tone");
+  els.statusAction.removeAttribute("href");
   els.statusTitle.textContent = "Estado del sensor";
   els.statusResult.textContent = "Cámara detenida";
   els.statusDesc.textContent = "Presiona «Iniciar escáner» para comenzar el análisis.";
@@ -386,24 +406,30 @@ async function handleSwitchCamera() {
 // Eventos
 // =========================================================
 
-els.startBtn.addEventListener("click", () => {
-  if (running) {
-    handleStop();
-  } else {
-    handleStart();
-  }
+if (els.startBtn) {
+  els.startBtn.addEventListener("click", () => {
+    if (running) {
+      handleStop();
+    } else {
+      handleStart();
+    }
+  });
+
+  els.switchBtn.addEventListener("click", handleSwitchCamera);
+  els.captureBtn.addEventListener("click", capturePhoto);
+
+  els.retakeBtn.addEventListener("click", () => {
+    els.photoModal.hidden = true;
+  });
+
+  window.addEventListener("beforeunload", stopStreamTracks);
+}
+
+document.querySelectorAll(".video-restart").forEach((button) => {
+  button.addEventListener("click", () => {
+    const video = document.getElementById("my-player");
+    if (!video) return;
+    video.currentTime = 0;
+    void video.play();
+  });
 });
-
-els.switchBtn.addEventListener("click", handleSwitchCamera);
-els.captureBtn.addEventListener("click", capturePhoto);
-
-els.retakeBtn.addEventListener("click", () => {
-  els.photoModal.hidden = true;
-});
-
-document.addEventListener("visibilitychange", () => {
-  // Libera la cámara si el usuario cambia de pestaña por mucho tiempo no es
-  // necesario, pero si cierra/recarga sí conviene apagarla.
-});
-
-window.addEventListener("beforeunload", stopStreamTracks);

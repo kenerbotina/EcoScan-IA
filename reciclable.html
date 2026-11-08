@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoScan IA - Clasificador de Residuos</title>
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+</head>
+<body class="info-page">
+
+    <div class="container">
+        <img class="site-logo" src="favicon.png" alt="Logo de EcoScan">
+        <h1>EcoScan <span>IA</span></h1>
+        <p class="subtitle">Clasificador de Plásticos y Otros Reciclables</p>
+
+        <div class="display-screen" id="screen">
+            <div class="status-title" id="status-title">Estatus del Sensor</div>
+            <div class="status-result" id="status-result">CÁMARA DETENIDA</div>
+            <div class="status-desc" id="status-desc">Presiona iniciar para analizar.</div>
+            <button id="dynamic-btn" class="status-action" hidden></button>
+        </div>
+
+        <div class="ai-panel">
+            <div class="viewfinder">
+                <video id="webcam-video" autoplay playsinline muted></video>
+            </div>
+
+            <div class="controls-row">
+                <button class="btn-init" id="start-btn" onclick="init()">Iniciar Escáner IA</button>
+                <button class="btn-extra btn-extra-ghost" id="switch-btn" hidden onclick="cambiarCamara()">Girar</button>
+                <button class="btn-extra" id="capture-btn" hidden onclick="tomarFoto()">Capturar</button>
+            </div>
+
+            <canvas id="capture-canvas"></canvas>
+            <div class="label-container" id="label-container"></div>
+        </div>
+    </div>
+
+    <div class="photo-modal" id="photo-modal" hidden>
+        <div class="photo-modal-card">
+            <img id="photo-preview">
+            <p id="photo-result-value"></p>
+            <button class="btn-extra btn-extra-ghost" onclick="cerrarModal()">Cerrar</button>
+            <a id="download-btn" class="btn-init" download="foto.png">Guardar</a>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        // NUEVA URL DEL MODELO
+        const URL = "https://teachablemachine.withgoogle.com/models/EiCGbCXYH/";
+
+        let model, labelContainer, maxPredictions;
+        let isFrontCamera = true;
+        let currentStream = null;
+        const videoElement = document.getElementById("webcam-video");
+        let ultimaClaseDetectada = "";
+
+        async function init() {
+            document.getElementById('start-btn').innerText = "Cargando...";
+            try {
+                model = await tmImage.load(URL + "model.json", URL + "metadata.json");
+                maxPredictions = model.getTotalClasses();
+                await levantarCamara();
+
+                labelContainer = document.getElementById("label-container");
+                labelContainer.innerHTML = "";
+                for (let i = 0; i < maxPredictions; i++) {
+                    labelContainer.innerHTML += `
+                        <div class="ai-bar-wrapper" id="bar-wrapper-${i}">
+                            <span><strong id="text-class-${i}">---</strong><span id="percentage-class-${i}">0%</span></span>
+                            <div class="ai-bar"><div class="ai-bar-fill" id="bar-class-${i}"></div></div>
+                        </div>`;
+                }
+                window.requestAnimationFrame(loop);
+                document.getElementById('start-btn').hidden = true;
+                document.getElementById('switch-btn').hidden = false;
+                document.getElementById('capture-btn').hidden = false;
+            } catch (e) { alert("Error de cámara."); }
+        }
+
+        async function levantarCamara() {
+            if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+            currentStream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: isFrontCamera ? "user" : "environment" }, audio: false
+            });
+            videoElement.srcObject = currentStream;
+            videoElement.style.transform = isFrontCamera ? "scaleX(-1)" : "scaleX(1)";
+        }
+
+        async function cambiarCamara() { isFrontCamera = !isFrontCamera; await levantarCamara(); }
+
+        async function loop() {
+            if (videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) await predict();
+            window.requestAnimationFrame(loop);
+        }
+
+        async function predict() {
+            const prediction = await model.predict(videoElement);
+            let mayor = { className: "", probability: 0 };
+
+            for (let i = 0; i < maxPredictions; i++) {
+                const clase = prediction[i].className.trim().toLowerCase();
+                const porcentaje = (prediction[i].probability * 100).toFixed(0);
+                
+                // Mapeo nombres
+                let label = clase === "util" ? "Envase de Plástico" : "Otro Reciclaje";
+                
+                document.getElementById(`text-class-${i}`).innerText = label;
+                document.getElementById(`percentage-class-${i}`).innerText = porcentaje + "%";
+                document.getElementById(`bar-class-${i}`).style.width = porcentaje + "%";
+                document.getElementById(`bar-wrapper-${i}`).setAttribute("data-class", clase);
+
+                if (prediction[i].probability > mayor.probability) mayor = prediction[i];
+            }
+
+            if (mayor.probability > 0.65) {
+                ultimaClaseDetectada = mayor.className.trim().toLowerCase();
+                actualizarPantalla(ultimaClaseDetectada);
+            }
+        }
+
+        function actualizarPantalla(clase) {
+            const pantalla = document.getElementById('screen');
+            const res = document.getElementById('status-result');
+            const desc = document.getElementById('status-desc');
+            const btn = document.getElementById('dynamic-btn');
+
+            btn.hidden = false;
+            if (clase === 'util') {
+                res.innerText = "MATERIAL: PLÁSTICO";
+                res.style.color = "#74b9ff";
+                desc.innerText = "Clasificación: Envase de plástico detectado.";
+                pantalla.style.borderColor = "var(--recyclable)";
+                pantalla.style.backgroundColor = "#13273a";
+                btn.innerText = "Siguiente destino";
+                btn.onclick = () => window.location.href = "botella-video.html";
+            } else {
+                res.innerText = "OTRO RECICLAJE";
+                res.style.color = "#a29bfe";
+                desc.innerText = "Clasificación: Material de otro tipo.";
+                pantalla.style.borderColor = "var(--organic)";
+                pantalla.style.backgroundColor = "#1a3224";
+                btn.innerText = "Registrar Material";
+                btn.onclick = () => window.location.href = "papel.html";
+            }
+        }
+
+        function tomarFoto() {
+            const canvas = document.getElementById("capture-canvas");
+            canvas.width = videoElement.videoWidth; canvas.height = videoElement.videoHeight;
+            const ctx = canvas.getContext("2d");
+            if (isFrontCamera) { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
+            ctx.drawImage(videoElement, 0, 0);
+            const data = canvas.toDataURL("image/png");
+            document.getElementById("photo-preview").src = data;
+            document.getElementById("photo-result-value").innerText = ultimaClaseDetectada === "util" ? "Plástico" : "Otro";
+            document.getElementById("download-btn").href = data;
+            document.getElementById("photo-modal").removeAttribute("hidden");
+        }
+
+        function cerrarModal() { document.getElementById("photo-modal").setAttribute("hidden", "true"); }
+    </script>
+</body>
+</html>
